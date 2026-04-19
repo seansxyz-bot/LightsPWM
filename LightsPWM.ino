@@ -1,168 +1,134 @@
 #include <Arduino.h>
 #include <Wire.h>
+
 #include "PWMEngine.h"
 #include "PatternEngine.h"
 #include "leds.h"
 #include "piclient.h"
-#include "themes.h"
+
+#include "file_protocol.h"
+#include "theme_file_reader.h"
+#include "theme_file_writer.h"
 
 #define DEBUG 0
 
-// ---- Address & compact write command ----
 static constexpr uint8_t I2C_ADDR = 0x08;
-static constexpr uint8_t CMD_APPLY_MASK = 0x15;  // [cmd, chan(0..3), m0,m1,m2, B5,B6,B7]
 
 PWMEngine pwm;
 PatternEngine patterns(/*activeID=*/0);
 
-volatile int g_activePattern = 0;  // 0..7 (0 = Off)
-volatile int g_speedPct = 50;      // 0..100
-volatile int o_theme = 12;         // 0..100
-volatile int n_theme = 12;         // 0..100
+ThemeFileReader g_themeReader;
+ThemeFileWriter g_themeWriter;
 
+volatile int g_activePattern = 0;
+volatile int g_speedPct = 50;
+volatile int g_currentTheme = 12;
 
-// Read-status flags for onRequest
 static volatile bool g_ready = false;
 static volatile bool g_shutdownReq = false;
 static volatile bool g_allOff = false;
 
-// LED snapshot for REQ_LED_STATE
 static uint8_t g_txBuf[NUM_OF_USED_OUTPUTS];
 static volatile bool g_ledSnapDirty = true;
 
-// Tiny LED helpers
+// --------------------------------------------------
+// tiny helpers
+// --------------------------------------------------
+
 static inline void setSingleChan(uint16_t idx, uint8_t chan, uint8_t val) {
   if (idx >= NUM_OF_LEDS) return;
+
   if (chan == 0) pwm.leds[idx].setRed(val);
   else if (chan == 1) pwm.leds[idx].setGreen(val);
   else pwm.leds[idx].setBlue(val);
 }
+
 static inline void setRGB(uint16_t idx, uint8_t r, uint8_t g, uint8_t b) {
   if (idx >= NUM_OF_LEDS) return;
   pwm.leds[idx].setRed(r);
   pwm.leds[idx].setGreen(g);
   pwm.leds[idx].setBlue(b);
 }
+
 static inline bool bitIsSet(uint32_t m, uint16_t bit) {
   return (m >> bit) & 0x1u;
 }
 
-// ------------ onRequest (unchanged) ------------
-static void i2c_onRequest() {
-  uint8_t req;
-  if (!PIClient::takeArmedRequest(req)) {
-    uint8_t zero = 0;
-    Wire.write(&zero, 1);
-    return;
-  }
-
-  switch (req) {
-    case PIClient::REQ_WAKE_READY:
-      {
-        uint8_t one = g_ready ? 1 : 0;
-        Wire.write(&one, 1);
-      }
-      break;
-
-    case PIClient::REQ_LED_STATE:
-      {
-        Wire.write(g_txBuf, (int)(3 * NUM_OF_LEDS));
-      }
-      break;
-
-    case PIClient::REQ_SHUTDOWN:
-      {
-        uint8_t one = g_allOff ? 1 : 0;
-        Wire.write(&one, 1);
-      }
-      break;
-
-    default:
-      {
-        uint8_t zero = 0;
-        Wire.write(&zero, 1);
-      }
-      break;
-  }
-}
-
-// ------------ setup / loop ------------
-void setup() {
-  pwm.begin();
-  patterns.setActive(g_activePattern);
-  patterns.setSpeedPercent(g_speedPct);
-  // initial snapshot
-  Serial.print("LED values: ");
-  for (uint16_t i = 0; i < 1; ++i) {
-    Serial.print("[");
-    Serial.print(pwm.leds[i].getRed());
-    Serial.print(",");
-    Serial.print(pwm.leds[i].getGreen());
-    Serial.print(",");
-    Serial.print(pwm.leds[i].getBlue());
-    Serial.print("]");
-    if (i < NUM_OF_LEDS - 1) Serial.print(" ");
-  }
-  Serial.println();
+static void refreshLedSnapshot() {
   for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
     g_txBuf[i * 3 + 0] = (uint8_t)pwm.leds[i].getRed();
     g_txBuf[i * 3 + 1] = (uint8_t)pwm.leds[i].getGreen();
     g_txBuf[i * 3 + 2] = (uint8_t)pwm.leds[i].getBlue();
   }
-  PIClient::begin(I2C_ADDR, i2c_onRequest, 100000);
-  g_ready = true;
-
   g_ledSnapDirty = false;
 }
 
-static void handleWrite(const PIClient::WriteMsg& m) {
-  // STRICT: only accept exactly 8-byte packets
-  if (m.len != 8) return;
+static void applyThemeToLeds(uint8_t themeId) {
+  if (!g_themeReader.hasTheme(themeId)) {
+    Serial.print("Theme not loaded: ");
+    Serial.println(themeId);
+    return;
+  }
 
-  const uint8_t* p = m.data;
+  const RGBColor* colors = g_themeReader.colors(themeId);
+  const uint8_t count = g_themeReader.colorCount(themeId);
+  if (!colors || count == 0) return;
 
-  const uint8_t cmd = p[0];
-  if (cmd != CMD_APPLY_MASK) return;
+  // simple repeating palette preview across LEDs
+  for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
+    const RGBColor& c = colors[i % count];
+    setRGB(i, c.r, c.g, c.b);
+  }
 
+  patterns.primeFromPWM(pwm);
+  g_ledSnapDirty = true;
+}
+
+static void handleApplyMaskPacket(const uint8_t* p) {
   const uint8_t chan = p[1];
-  const uint8_t m0 = p[2], m1 = p[3], m2 = p[4];
-  const uint8_t b5 = p[5], b6 = p[6], b7 = p[7];
+  const uint8_t m0 = p[2];
+  const uint8_t m1 = p[3];
+  const uint8_t m2 = p[4];
+  const uint8_t b5 = p[5];
+  const uint8_t b6 = p[6];
+  const uint8_t b7 = p[7];
 
-  const uint32_t mask = (uint32_t)m0 | ((uint32_t)m1 << 8) | ((uint32_t)m2 << 16);
+  const uint32_t mask = (uint32_t)m0 |
+                        ((uint32_t)m1 << 8) |
+                        ((uint32_t)m2 << 16);
 
   if (chan <= 2) {
-    // Single-channel write: use b5; b6/b7 ignored
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setSingleChan(i, chan, b5);
     }
     g_ledSnapDirty = true;
-  } else if (chan == 3) {
-    // RGB write: b5,b6,b7 => R,G,B
+    return;
+  }
+
+  if (chan == 3) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setRGB(i, b5, b6, b7);
     }
     g_ledSnapDirty = true;
-  } else if (chan >= 4 && chan <= 16) {
+    return;
+  }
+
+  // theme/pattern/speed packet
+  if (chan >= 4 && chan <= 16) {
     const uint8_t newTheme = chan - 4;
 
-    // Only repaint & re-prime when the theme actually changes
-    if (newTheme != o_theme) {
-      n_theme = newTheme;
-      Serial.println("New Theme");
-      o_theme = n_theme;
-
-      
-      patterns.primeFromPWM(pwm);  // capture new base
-      g_ledSnapDirty = true;
+    if (newTheme != g_currentTheme) {
+      g_currentTheme = newTheme;
+      Serial.print("Applying uploaded theme ");
+      Serial.println(g_currentTheme);
+      applyThemeToLeds(g_currentTheme);
     }
 
-    // Only change active pattern if the value actually changed
     if (g_activePattern != b5) {
-      g_activePattern = b5;  // 0..8
+      g_activePattern = b5;
       patterns.setActive(g_activePattern);
     }
 
-    // Clamp and apply speed (treat 0 as intentional pause; otherwise default was 50)
     int newSpeed = (int)b6;
     if (newSpeed < 0) newSpeed = 0;
     if (newSpeed > 100) newSpeed = 100;
@@ -173,18 +139,138 @@ static void handleWrite(const PIClient::WriteMsg& m) {
     }
   }
 }
-// Convert one byte to "01010101"
-static inline void byte_to_bits(char out[9], uint8_t b) {
-  for (int i = 7; i >= 0; --i) out[7 - i] = (b & (1u << i)) ? '1' : '0';
-  out[8] = '\0';
+
+static void handleFilePacket(const uint8_t* p) {
+  const uint8_t cmd = p[0];
+
+  switch (cmd) {
+    case FileProto::CMD_BEGIN_FILE:
+      if (!g_themeWriter.beginFile(p[1], p[2], p[3], p[4])) {
+        Serial.println("BEGIN_FILE failed");
+      } else {
+        Serial.print("BEGIN_FILE ok, type=");
+        Serial.print(p[1]);
+        Serial.print(" id=");
+        Serial.print(p[2]);
+        Serial.print(" lines=");
+        Serial.println(p[3]);
+      }
+      break;
+
+    case FileProto::CMD_FILE_CHUNK:
+      if (!g_themeWriter.pushChunk(p[1], p[2], p[3], p[4], p[5], p[6], p[7])) {
+        Serial.println("FILE_CHUNK failed");
+      }
+      break;
+
+    case FileProto::CMD_END_FILE:
+      if (!g_themeWriter.endFile(p[1], g_themeReader)) {
+        Serial.println("END_FILE failed");
+      } else {
+        Serial.println("END_FILE success");
+        if (g_themeReader.hasTheme(g_currentTheme)) {
+          applyThemeToLeds(g_currentTheme);
+        }
+      }
+      break;
+
+    case FileProto::CMD_ABORT_FILE:
+      g_themeWriter.abortFile();
+      Serial.println("FILE aborted");
+      break;
+  }
+}
+
+// --------------------------------------------------
+// onRequest
+// --------------------------------------------------
+
+static void i2c_onRequest() {
+  uint8_t req;
+  if (!PIClient::takeArmedRequest(req)) {
+    uint8_t zero = 0;
+    Wire.write(&zero, 1);
+    return;
+  }
+
+  switch (req) {
+    case FileProto::REQ_WAKE_READY: {
+      uint8_t one = g_ready ? 1 : 0;
+      Wire.write(&one, 1);
+    } break;
+
+    case FileProto::REQ_LED_STATE: {
+      Wire.write(g_txBuf, (int)(3 * NUM_OF_LEDS));
+    } break;
+
+    case FileProto::REQ_SHUTDOWN: {
+      uint8_t one = g_allOff ? 1 : 0;
+      Wire.write(&one, 1);
+    } break;
+
+    case FileProto::REQ_FILE_STATUS: {
+      uint8_t st = g_themeWriter.status();
+      Wire.write(&st, 1);
+    } break;
+
+    default: {
+      uint8_t zero = 0;
+      Wire.write(&zero, 1);
+    } break;
+  }
+}
+
+// --------------------------------------------------
+// setup / loop
+// --------------------------------------------------
+
+void setup() {
+  Serial.begin(115200);
+
+  pwm.begin();
+  patterns.setActive(g_activePattern);
+  patterns.setSpeedPercent(g_speedPct);
+
+  refreshLedSnapshot();
+
+  PIClient::begin(I2C_ADDR, i2c_onRequest, 100000);
+
+  g_ready = true;
+  g_ledSnapDirty = false;
+
+  Serial.println("LightsPWM ready");
+}
+
+static void handleWrite(const PIClient::WriteMsg& m) {
+  if (m.len != 8) return;
+
+  const uint8_t* p = m.data;
+  const uint8_t cmd = p[0];
+
+  switch (cmd) {
+    case FileProto::CMD_APPLY_MASK:
+      handleApplyMaskPacket(p);
+      break;
+
+    case FileProto::CMD_BEGIN_FILE:
+    case FileProto::CMD_FILE_CHUNK:
+    case FileProto::CMD_END_FILE:
+    case FileProto::CMD_ABORT_FILE:
+      handleFilePacket(p);
+      break;
+
+    default:
+      break;
+  }
 }
 
 unsigned long lastPrintALLLeds = 0;
+
 void printALLLedsValues(unsigned long printSpeedMilliSeconds) {
   unsigned long now = millis();
-
-  if (now - lastPrintALLLeds >= printSpeedMilliSeconds) {  // 1000 ms = 1 second
+  if (now - lastPrintALLLeds >= printSpeedMilliSeconds) {
     lastPrintALLLeds = now;
+
     Serial.print("LED values: ");
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       Serial.print("[");
@@ -210,31 +296,24 @@ void loop() {
   }
 
   if (applied || g_ledSnapDirty) {
-    for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
-      g_txBuf[i * 3 + 0] = (uint8_t)pwm.leds[i].getRed();
-      g_txBuf[i * 3 + 1] = (uint8_t)pwm.leds[i].getGreen();
-      g_txBuf[i * 3 + 2] = (uint8_t)pwm.leds[i].getBlue();
-    }
-    g_ledSnapDirty = false;
+    refreshLedSnapshot();
   }
 
-  // Optional shutdown path (unchanged)
   if (g_shutdownReq && !g_allOff) {
     Serial.println("Shutting Down");
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
-      pwm.leds[i].setRed(0);
-      pwm.leds[i].setGreen(0);
-      pwm.leds[i].setBlue(0);
+      setRGB(i, 0, 0, 0);
     }
     g_allOff = true;
     g_ledSnapDirty = true;
   }
-    
-    if (DEBUG)
-      printALLLedsValues(1000);// milli seconds
 
-  // If "patterns" is enabled (active != 0), render into pwm.leds[]
+  if (DEBUG) {
+    printALLLedsValues(1000);
+  }
+
   if (g_activePattern > 0) {
     patterns.tick(pwm);
+    g_ledSnapDirty = true;
   }
 }
