@@ -7,6 +7,7 @@
 #include "piclient.h"
 
 #include "file_protocol.h"
+#include "theme_storage.h"
 #include "theme_file_reader.h"
 #include "theme_file_writer.h"
 
@@ -30,10 +31,6 @@ static volatile bool g_allOff = false;
 
 static uint8_t g_txBuf[NUM_OF_USED_OUTPUTS];
 static volatile bool g_ledSnapDirty = true;
-
-// --------------------------------------------------
-// tiny helpers
-// --------------------------------------------------
 
 static inline void setSingleChan(uint16_t idx, uint8_t chan, uint8_t val) {
   if (idx >= NUM_OF_LEDS) return;
@@ -74,7 +71,6 @@ static void applyThemeToLeds(uint8_t themeId) {
   const uint8_t count = g_themeReader.colorCount(themeId);
   if (!colors || count == 0) return;
 
-  // simple repeating palette preview across LEDs
   for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
     const RGBColor& c = colors[i % count];
     setRGB(i, c.r, c.g, c.b);
@@ -101,6 +97,7 @@ static void handleApplyMaskPacket(const uint8_t* p) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setSingleChan(i, chan, b5);
     }
+    patterns.primeFromPWM(pwm);
     g_ledSnapDirty = true;
     return;
   }
@@ -109,17 +106,20 @@ static void handleApplyMaskPacket(const uint8_t* p) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setRGB(i, b5, b6, b7);
     }
+    patterns.primeFromPWM(pwm);
     g_ledSnapDirty = true;
     return;
   }
 
-  // theme/pattern/speed packet
-  if (chan >= 4 && chan <= 16) {
+  if (chan >= 4) {
     const uint8_t newTheme = chan - 4;
+    if (newTheme >= ThemeFileReader::MAX_THEMES) {
+      return;
+    }
 
     if (newTheme != g_currentTheme) {
       g_currentTheme = newTheme;
-      Serial.print("Applying uploaded theme ");
+      Serial.print("Applying theme ");
       Serial.println(g_currentTheme);
       applyThemeToLeds(g_currentTheme);
     }
@@ -181,10 +181,6 @@ static void handleFilePacket(const uint8_t* p) {
   }
 }
 
-// --------------------------------------------------
-// onRequest
-// --------------------------------------------------
-
 static void i2c_onRequest() {
   uint8_t req;
   if (!PIClient::takeArmedRequest(req)) {
@@ -220,16 +216,23 @@ static void i2c_onRequest() {
   }
 }
 
-// --------------------------------------------------
-// setup / loop
-// --------------------------------------------------
-
 void setup() {
   Serial.begin(115200);
 
   pwm.begin();
   patterns.setActive(g_activePattern);
   patterns.setSpeedPercent(g_speedPct);
+
+  if (ThemeStorage::begin()) {
+    Serial.println("Theme storage ready");
+    g_themeReader.loadAllFromDisk();
+  } else {
+    Serial.println("Theme storage init failed");
+  }
+
+  if (g_themeReader.hasTheme((uint8_t)g_currentTheme)) {
+    applyThemeToLeds((uint8_t)g_currentTheme);
+  }
 
   refreshLedSnapshot();
 

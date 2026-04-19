@@ -8,7 +8,6 @@ public:
   ThemeFileWriter();
 
   void reset();
-
   uint8_t status() const;
 
   bool beginFile(uint8_t fileType, uint8_t fileId, uint8_t lineCount, uint8_t version);
@@ -17,6 +16,8 @@ public:
   void abortFile();
 
 private:
+  bool writeThemeFileToDisk(ThemeFileReader& reader);
+
   uint8_t status_ = FileProto::FILE_IDLE;
   uint8_t fileType_ = 0;
   uint8_t fileId_ = 0;
