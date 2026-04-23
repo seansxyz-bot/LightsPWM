@@ -88,7 +88,6 @@ bool PatternFileWriter::writePatternFileToDisk_(PatternFileReader& reader) {
   f.print("slgl "); f.println(t.sloglo);
   f.print("twnk "); f.println(t.twinkle);
   f.print("fade "); f.println(t.slowfade);
-  f.print("iwav "); f.println(t.inwaves);
   f.print("altn "); f.println(t.alternate);
 
   f.flush();

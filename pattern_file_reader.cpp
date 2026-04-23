@@ -16,8 +16,7 @@ uint8_t PatternFileReader::getStandaloneSpeed(uint8_t patternId) const {
     case 5: return table_.sloglo;
     case 6: return table_.twinkle;
     case 7: return table_.slowfade;
-    case 8: return table_.inwaves;
-    case 9: return table_.alternate;
+    case 8: return table_.alternate;
     default: return 50;
   }
 }
@@ -37,8 +36,7 @@ void PatternFileReader::setStandaloneSpeed(uint8_t patternId, uint8_t speed) {
     case 5: table_.sloglo = speed; break;
     case 6: table_.twinkle = speed; break;
     case 7: table_.slowfade = speed; break;
-    case 8: table_.inwaves = speed; break;
-    case 9: table_.alternate = speed; break;
+    case 8: table_.alternate = speed; break;
     default: break;
   }
 }
@@ -84,7 +82,6 @@ bool PatternFileReader::parseLine_(const String& line) {
   else if (strcmp(tag, "slgl") == 0) table_.sloglo = speed;
   else if (strcmp(tag, "twnk") == 0) table_.twinkle = speed;
   else if (strcmp(tag, "fade") == 0) table_.slowfade = speed;
-  else if (strcmp(tag, "iwav") == 0) table_.inwaves = speed;
   else if (strcmp(tag, "altn") == 0) table_.alternate = speed;
   else return false;
 

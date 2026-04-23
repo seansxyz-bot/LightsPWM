@@ -11,7 +11,6 @@ struct PatternSpeedTable {
   uint8_t sloglo    = 50;
   uint8_t twinkle   = 50;
   uint8_t slowfade  = 50;
-  uint8_t inwaves   = 50;
   uint8_t alternate = 50;
 
   static uint8_t clampPct(int v) {

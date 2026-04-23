@@ -194,8 +194,7 @@ private:
       case 5: return speeds_.sloglo;
       case 6: return speeds_.twinkle;
       case 7: return speeds_.slowfade;
-      case 8: return speeds_.inwaves;
-      case 9: return speeds_.alternate;
+      case 8: return speeds_.alternate;
       default: return 50;
     }
   }
