@@ -31,7 +31,6 @@ volatile int g_speedPct = 50;
 volatile int g_currentTheme = 0;
 
 static volatile bool g_ready = false;
-static volatile bool g_shutdownReq = false;
 static volatile bool g_allOff = false;
 
 static uint8_t g_txBuf[NUM_OF_USED_OUTPUTS];
@@ -198,32 +197,35 @@ static void handleApplyMaskPacket(const uint8_t* p) {
   }
 
   if (chan >= 4) {
-  const uint8_t newTheme = chan - 4;
-  if (newTheme >= ThemeFileReader::MAX_THEMES) {
-    return;
-  }
-
-  if (newTheme != g_currentTheme) {
-    g_currentTheme = newTheme;
-
-    if (g_currentTheme == 0) {
-      Serial.println("Applying manual LEDs");
-      loadManualFromDisk();
-    } else {
-      Serial.print("Applying theme ");
-      Serial.println(g_currentTheme);
-      applyThemeToLeds(g_currentTheme);
+    const uint8_t newTheme = chan - 4;
+    if (newTheme >= ThemeFileReader::MAX_THEMES) {
+      return;
     }
-  }
 
-  if (g_activePattern != b5) {
-    g_activePattern = b5;
-    patterns.setActive(g_activePattern);
-  }
+    if (newTheme != g_currentTheme) {
+      g_currentTheme = newTheme;
+
+      if (g_currentTheme == 0) {
+        Serial.println("Applying manual LEDs");
+        loadManualFromDisk();
+      } else {
+        Serial.print("Applying theme ");
+        Serial.println(g_currentTheme);
+        applyThemeToLeds(g_currentTheme);
+      }
+    }
 
     if (g_activePattern != b5) {
       g_activePattern = b5;
-      patterns.setActive(g_activePattern);
+
+      if (g_activePattern == 0) {
+        Serial.println("Pattern off: plain PWM mode");
+        patterns.setActive(0);
+        patterns.primeFromPWM(pwm);
+        g_ledSnapDirty = true;
+      } else {
+        patterns.setActive(g_activePattern);
+      }
     }
 
     int newSpeed = (int)b6;
@@ -288,8 +290,7 @@ static void handleFilePacket(const uint8_t* p) {
             Serial.println("FILE_CHUNK theme failed");
           }
         } else if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
-          // only p[1] matters for pattern speed chunks
-          if (!g_patternWriter.pushChunk(p[1])) {
+          if (!g_patternWriter.pushChunk(p[1], p[2])) {
             Serial.println("FILE_CHUNK pattern failed");
           }
         }
@@ -366,7 +367,7 @@ static void i2c_onRequest() {
       }
       break;
 
-    case FileProto::REQ_SHUTDOWN:
+    case FileProto::REQ_ALL_OFF_STATUS:
       {
         uint8_t one = g_allOff ? 1 : 0;
         Wire.write(&one, 1);
@@ -489,15 +490,6 @@ void loop() {
 
   if (applied || g_ledSnapDirty) {
     refreshLedSnapshot();
-  }
-
-  if (g_shutdownReq && !g_allOff) {
-    Serial.println("Shutting Down");
-    for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
-      setRGB(i, 0, 0, 0);
-    }
-    g_allOff = true;
-    g_ledSnapDirty = true;
   }
 
   if (DEBUG) {

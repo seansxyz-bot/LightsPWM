@@ -17,6 +17,8 @@ void PatternFileWriter::reset() {
 
   for (uint8_t &s : stagedSpeeds_)
     s = 50;
+  for (bool &received : received_)
+    received = false;
 }
 
 void PatternFileWriter::abortFile() { reset(); }
@@ -29,11 +31,7 @@ bool PatternFileWriter::beginFile(uint8_t patternId, uint8_t expectedLines,
   expectedLines_ = expectedLines;
   version_ = version;
 
-  // Bulk pattern-speed file:
-  // chunk 0 = ID 2
-  // chunk 1 = ID 3
-  // ...
-  // chunk 6 = ID 8
+  // Bulk pattern-speed file. Each chunk carries patternId + speed.
   if (patternId_ != kPatternBulkFileId) {
     status_ = FileProto::FILE_ERROR;
     return false;
@@ -48,17 +46,23 @@ bool PatternFileWriter::beginFile(uint8_t patternId, uint8_t expectedLines,
   return true;
 }
 
-bool PatternFileWriter::pushChunk(uint8_t speed) {
+bool PatternFileWriter::pushChunk(uint8_t patternId, uint8_t speed) {
   if (status_ != FileProto::FILE_RECEIVING)
     return false;
 
-  if (receivedLines_ >= expectedLines_) {
+  if (patternId < 2 || patternId > 8 || receivedLines_ >= expectedLines_) {
     status_ = FileProto::FILE_ERROR;
     return false;
   }
 
-  stagedSpeeds_[receivedLines_] = PatternSpeedTable::clampPct(speed);
+  const uint8_t index = patternId - 2;
+  if (received_[index]) {
+    status_ = FileProto::FILE_ERROR;
+    return false;
+  }
 
+  stagedSpeeds_[index] = PatternSpeedTable::clampPct(speed);
+  received_[index] = true;
   receivedLines_++;
   return true;
 }
@@ -100,6 +104,13 @@ bool PatternFileWriter::endFile(uint8_t expectedLines,
   if (expectedLines != expectedLines_ || receivedLines_ != expectedLines_) {
     status_ = FileProto::FILE_ERROR;
     return false;
+  }
+
+  for (uint8_t i = 0; i < kPatternSpeedCount; ++i) {
+    if (!received_[i]) {
+      status_ = FileProto::FILE_ERROR;
+      return false;
+    }
   }
 
   for (uint8_t i = 0; i < kPatternSpeedCount; ++i) {

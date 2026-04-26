@@ -6,7 +6,7 @@ namespace PIClient {
 // Read-requests (unchanged)
 static constexpr uint8_t REQ_WAKE_READY = 0xF0;
 static constexpr uint8_t REQ_LED_STATE = 0xF1;
-static constexpr uint8_t REQ_SHUTDOWN = 0xF2;
+static constexpr uint8_t REQ_ALL_OFF_STATUS = 0xF2;
 static constexpr uint8_t REQ_FILE_STATUS = 0xF3;
 
 struct WriteMsg {
@@ -50,7 +50,7 @@ static void onReceiveISR(int n) {
 
   if (first == REQ_WAKE_READY || 
       first == REQ_LED_STATE || 
-      first == REQ_SHUTDOWN || 
+      first == REQ_ALL_OFF_STATUS || 
       first == REQ_FILE_STATUS) {
     g_lastReq = first;
     g_haveReq = true;

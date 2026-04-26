@@ -1,4 +1,4 @@
-#include "LEDs.h"
+#include "leds.h"
 
 
 void LEDs::setRed(int r)        { red = r; }

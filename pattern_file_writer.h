@@ -13,7 +13,7 @@ public:
   uint8_t status() const { return status_; }
 
   bool beginFile(uint8_t patternId, uint8_t expectedLines, uint8_t version);
-  bool pushChunk(uint8_t speed);
+  bool pushChunk(uint8_t patternId, uint8_t speed);
   bool endFile(uint8_t expectedLines, PatternFileReader &reader);
   void abortFile();
 
@@ -27,4 +27,5 @@ private:
   uint8_t version_ = 0;
 
   uint8_t stagedSpeeds_[7]{50, 50, 50, 50, 50, 50, 50};
+  bool received_[7]{false, false, false, false, false, false, false};
 };

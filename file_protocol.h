@@ -14,7 +14,7 @@ static constexpr uint8_t CMD_ABORT_FILE  = 0x23;
 
 static constexpr uint8_t REQ_WAKE_READY  = 0xF0;
 static constexpr uint8_t REQ_LED_STATE   = 0xF1;
-static constexpr uint8_t REQ_SHUTDOWN    = 0xF2;
+static constexpr uint8_t REQ_ALL_OFF_STATUS = 0xF2;
 static constexpr uint8_t REQ_FILE_STATUS = 0xF3;
 
 static constexpr uint8_t FILE_THEME      = 0x01;
