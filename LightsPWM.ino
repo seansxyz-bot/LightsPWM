@@ -28,7 +28,7 @@ ThemeFileWriter g_themeWriter;
 
 volatile int g_activePattern = 0;
 volatile int g_speedPct = 50;
-volatile int g_currentTheme = 12;
+volatile int g_currentTheme = 0;
 
 static volatile bool g_ready = false;
 static volatile bool g_shutdownReq = false;
@@ -36,6 +36,12 @@ static volatile bool g_allOff = false;
 
 static uint8_t g_txBuf[NUM_OF_USED_OUTPUTS];
 static volatile bool g_ledSnapDirty = true;
+
+static constexpr const char* MANUAL_FILE_PATH = "/manual";
+static constexpr uint32_t MANUAL_SAVE_DELAY_MS = 1500;
+
+static bool g_manualDirty = false;
+static uint32_t g_manualDirtyAt = 0;
 
 static inline void setSingleChan(uint16_t idx, uint8_t chan, uint8_t val) {
   if (idx >= NUM_OF_LEDS) return;
@@ -50,6 +56,79 @@ static inline void setRGB(uint16_t idx, uint8_t r, uint8_t g, uint8_t b) {
   pwm.leds[idx].setRed(r);
   pwm.leds[idx].setGreen(g);
   pwm.leds[idx].setBlue(b);
+}
+
+static void markManualDirty() {
+  g_manualDirty = true;
+  g_manualDirtyAt = millis();
+}
+
+static bool saveManualToDisk() {
+  if (!ThemeStorage::begin()) {
+    Serial.println("Manual save failed: storage not ready");
+    return false;
+  }
+
+  SD.remove(MANUAL_FILE_PATH);
+
+  File f = SD.open(MANUAL_FILE_PATH, FILE_WRITE);
+  if (!f) {
+    Serial.println("Manual save failed: could not open /manual");
+    return false;
+  }
+
+  for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
+    f.print((int)pwm.leds[i].getRed());
+    f.print(" ");
+    f.print((int)pwm.leds[i].getGreen());
+    f.print(" ");
+    f.println((int)pwm.leds[i].getBlue());
+  }
+
+  f.close();
+  Serial.println("Manual LED values saved");
+  return true;
+}
+
+static bool loadManualFromDisk() {
+  if (!ThemeStorage::begin()) {
+    Serial.println("Manual load failed: storage not ready");
+    return false;
+  }
+
+  File f = SD.open(MANUAL_FILE_PATH, FILE_READ);
+  if (!f) {
+    Serial.println("No /manual file found");
+    return false;
+  }
+
+  uint16_t led = 0;
+
+  while (f.available() && led < NUM_OF_LEDS) {
+    int r = f.parseInt();
+    int g = f.parseInt();
+    int b = f.parseInt();
+
+    r = constrain(r, 0, 255);
+    g = constrain(g, 0, 255);
+    b = constrain(b, 0, 255);
+
+    setRGB(led, (uint8_t)r, (uint8_t)g, (uint8_t)b);
+    led++;
+  }
+
+  f.close();
+
+  if (led > 0) {
+    patterns.primeFromPWM(pwm);
+    g_ledSnapDirty = true;
+    Serial.print("Manual LED values loaded: ");
+    Serial.println(led);
+    return true;
+  }
+
+  Serial.println("/manual was empty or invalid");
+  return false;
 }
 
 static inline bool bitIsSet(uint32_t m, uint16_t bit) {
@@ -100,8 +179,10 @@ static void handleApplyMaskPacket(const uint8_t* p) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setSingleChan(i, chan, b5);
     }
+
     patterns.primeFromPWM(pwm);
     g_ledSnapDirty = true;
+    markManualDirty();
     return;
   }
 
@@ -109,23 +190,36 @@ static void handleApplyMaskPacket(const uint8_t* p) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
       if (bitIsSet(mask, i)) setRGB(i, b5, b6, b7);
     }
+
     patterns.primeFromPWM(pwm);
     g_ledSnapDirty = true;
+    markManualDirty();
     return;
   }
 
   if (chan >= 4) {
-    const uint8_t newTheme = chan - 4;
-    if (newTheme >= ThemeFileReader::MAX_THEMES) {
-      return;
-    }
+  const uint8_t newTheme = chan - 4;
+  if (newTheme >= ThemeFileReader::MAX_THEMES) {
+    return;
+  }
 
-    if (newTheme != g_currentTheme) {
-      g_currentTheme = newTheme;
+  if (newTheme != g_currentTheme) {
+    g_currentTheme = newTheme;
+
+    if (g_currentTheme == 0) {
+      Serial.println("Applying manual LEDs");
+      loadManualFromDisk();
+    } else {
       Serial.print("Applying theme ");
       Serial.println(g_currentTheme);
       applyThemeToLeds(g_currentTheme);
     }
+  }
+
+  if (g_activePattern != b5) {
+    g_activePattern = b5;
+    patterns.setActive(g_activePattern);
+  }
 
     if (g_activePattern != b5) {
       g_activePattern = b5;
@@ -140,6 +234,26 @@ static void handleApplyMaskPacket(const uint8_t* p) {
       g_speedPct = newSpeed;
     }
   }
+}
+
+static void handleLedFramePacket(const uint8_t* p) {
+  const uint8_t ledIndex = p[1];
+  const uint8_t r = p[2];
+  const uint8_t g = p[3];
+  const uint8_t b = p[4];
+
+  if (ledIndex >= NUM_OF_LEDS)
+    return;
+
+  // LightShow is live-only. Do not write to disk.
+  // Also stop pattern engine from immediately overwriting this frame.
+  if (g_activePattern != 0) {
+    g_activePattern = 0;
+    patterns.setActive(0);
+  }
+
+  setRGB(ledIndex, r, g, b);
+  g_ledSnapDirty = true;
 }
 
 static void handleFilePacket(const uint8_t* p) {
@@ -290,8 +404,10 @@ void setup() {
     Serial.println("Theme storage init failed");
   }
 
-  if (g_themeReader.hasTheme((uint8_t)g_currentTheme)) {
-    applyThemeToLeds((uint8_t)g_currentTheme);
+  if (!loadManualFromDisk()) {
+    if (g_themeReader.hasTheme((uint8_t)g_currentTheme)) {
+      applyThemeToLeds((uint8_t)g_currentTheme);
+    }
   }
 
   refreshLedSnapshot();
@@ -314,18 +430,20 @@ static void handleWrite(const PIClient::WriteMsg& m) {
     case FileProto::CMD_APPLY_MASK:
       handleApplyMaskPacket(p);
       break;
+
     case FileProto::CMD_PATTERN_SPEED:
       {
         const uint8_t patternId = p[1];
         const uint8_t speed = p[2];
-
         g_patternReader.setSpeed(patternId, speed);
-
-        // If PatternEngine has a live setter, call it too.
-       patterns.setSpeedTable(g_patternReader.table());
-
+        patterns.setSpeedTable(g_patternReader.table());
         break;
       }
+
+    case FileProto::CMD_LED_FRAME:
+      handleLedFramePacket(p);
+      break;
+
     case FileProto::CMD_BEGIN_FILE:
     case FileProto::CMD_FILE_CHUNK:
     case FileProto::CMD_END_FILE:
@@ -384,6 +502,14 @@ void loop() {
 
   if (DEBUG) {
     printALLLedsValues(1000);
+  }
+
+  if (g_manualDirty && (millis() - g_manualDirtyAt >= MANUAL_SAVE_DELAY_MS)) {
+    if (saveManualToDisk()) {
+      g_manualDirty = false;
+    } else {
+      g_manualDirtyAt = millis();
+    }
   }
 
   if (g_activePattern > 0) {
