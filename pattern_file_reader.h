@@ -3,15 +3,13 @@
 #include <Arduino.h>
 
 struct PatternSpeedTable {
-  uint8_t combo[7] = {50, 50, 50, 50, 50, 50, 50};
-
-  uint8_t chase     = 50;
-  uint8_t comet     = 50;
-  uint8_t waves     = 50;
-  uint8_t sloglo    = 50;
-  uint8_t twinkle   = 50;
-  uint8_t slowfade  = 50;
-  uint8_t alternate = 50;
+  uint8_t chase = 50;      // id 2
+  uint8_t comet = 50;      // id 3
+  uint8_t waves = 50;      // id 4
+  uint8_t sloglo = 50;     // id 5
+  uint8_t twinkle = 50;    // id 6
+  uint8_t slowfade = 50;   // id 7
+  uint8_t alternate = 50;  // id 8
 
   static uint8_t clampPct(int v) {
     if (v < 0) return 0;
@@ -23,13 +21,12 @@ struct PatternSpeedTable {
 class PatternFileReader {
 public:
   bool loadFromDisk();
-  const PatternSpeedTable& table() const { return table_; }
+  const PatternSpeedTable& table() const {
+    return table_;
+  }
 
-  uint8_t getStandaloneSpeed(uint8_t patternId) const;
-  uint8_t getComboSpeed(uint8_t comboIndex) const;
-
-  void setStandaloneSpeed(uint8_t patternId, uint8_t speed);
-  void setComboSpeed(uint8_t comboIndex, uint8_t speed);
+  uint8_t getSpeed(uint8_t patternId) const;
+  void setSpeed(uint8_t patternId, uint8_t speed);
 
 private:
   PatternSpeedTable table_;

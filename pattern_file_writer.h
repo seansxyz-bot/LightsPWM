@@ -25,5 +25,5 @@ private:
   uint8_t expectedLines_ = 0;
   uint8_t receivedLines_ = 0;
   uint8_t version_ = 0;
-  uint8_t staging_[7] = {50, 50, 50, 50, 50, 50, 50};
+  uint8_t stagedSpeed_ = 50;
 };

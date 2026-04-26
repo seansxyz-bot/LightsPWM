@@ -101,36 +101,44 @@ public:
       float b = 1.f;
 
       switch (activeID_) {
-        case 1: {
-          switch (combo_mode_) {
-            case 0:
-              b = (i == chase_idx_) ? 1.f : 0.18f;
-              break;
-            case 1:
-              b = comet_brightness(i, chase_idx_, kDots);
-              break;
-            case 2:
-              b = 0.35f + 0.65f * (0.5f * (1.f + sinf(phase_ + i * 0.45f)));
-              break;
-            case 3:
-              b = 0.22f + 0.78f * (0.5f * (1.f + sinf(t_ * 0.6f)));
-              break;
-            case 4:
-              b = twinkleStep_(twinkle2_[i], i);
-              break;
-            case 5:
-              b = 0.25f + 0.75f * (0.5f * (1.f + sinf(t_ * 1.2f + ((float)i / 2.0f) * 0.9f)));
-              break;
-            case 6: {
-              const int src = ((i - frameOffset) % kDots + kDots) % kDots;
-              pwm.leds[i].setRed(base_[src][0]);
-              pwm.leds[i].setGreen(base_[src][1]);
-              pwm.leds[i].setBlue(base_[src][2]);
-              continue;
+        case 1:
+          {
+            switch (combo_mode_) {
+              case 0:  // Chase, id 2
+                b = (i == chase_idx_) ? 1.f : 0.18f;
+                break;
+
+              case 1:  // Comet, id 3
+                b = comet_brightness(i, chase_idx_, kDots);
+                break;
+
+              case 2:  // Waves, id 4
+                b = 0.35f + 0.65f * (0.5f * (1.f + sinf(phase_ + i * 0.45f)));
+                break;
+
+              case 3:  // Slo-Glo, id 5
+                b = 0.22f + 0.78f * (0.5f * (1.f + sinf(t_ * 0.6f)));
+                break;
+
+              case 4:  // Twinkle, id 6
+                b = twinkleStep_(twinkle2_[i], i);
+                break;
+
+              case 5:  // Fade, id 7
+                b = 0.20f + 0.80f * (0.5f * (1.f + sinf(t_ * 0.6f)));
+                break;
+
+              case 6:
+                {  // Alternate, id 8
+                  const int src = ((i - frameOffset) % kDots + kDots) % kDots;
+                  pwm.leds[i].setRed(base_[src][0]);
+                  pwm.leds[i].setGreen(base_[src][1]);
+                  pwm.leds[i].setBlue(base_[src][2]);
+                  continue;
+                }
             }
           }
-        } break;
-
+          break;
         case 2:
           b = (i == chase_idx_) ? 1.f : 0.18f;
           break;
@@ -150,15 +158,15 @@ public:
           b = 0.20f + 0.80f * (0.5f * (1.f + sinf(t_ * 0.6f)));
           break;
         case 8:
-          b = 0.25f + 0.75f * (0.5f * (1.f + sinf(t_ * 1.2f + ((float)i / 2.0f) * 0.9f)));
-          break;
-        case 9: {
-          const int src = ((i - frameOffset) % kDots + kDots) % kDots;
-          pwm.leds[i].setRed(base_[src][0]);
-          pwm.leds[i].setGreen(base_[src][1]);
-          pwm.leds[i].setBlue(base_[src][2]);
-          continue;
-        }
+          {  // Alternate
+            int src = i - frameOffset;
+            if (src < 0) src += kDots;
+
+            pwm.leds[i].setRed(base_[src][0]);
+            pwm.leds[i].setGreen(base_[src][1]);
+            pwm.leds[i].setBlue(base_[src][2]);
+            continue;
+          }
 
         default:
           break;
@@ -181,13 +189,22 @@ public:
 private:
   static constexpr int kDots = NUM_OF_LEDS;
 
-  uint8_t currentSpeedPct_() const {
-    if (activeID_ == 1) {
-      if (combo_mode_ < 0 || combo_mode_ > 6) return 50;
-      return speeds_.combo[combo_mode_];
+  uint8_t currentPatternId_() const {
+    if (activeID_ != 1) {
+      return activeID_;
     }
 
-    switch (activeID_) {
+    // Combo cycles pattern IDs 2-7.
+    // combo_mode_: 0..5 -> patternId: 2..7
+    return (uint8_t)(combo_mode_ + 2);
+  }
+
+  uint8_t currentSpeedPct_() const {
+    return speedForPatternId_(currentPatternId_());
+  }
+
+  uint8_t speedForPatternId_(uint8_t patternId) const {
+    switch (patternId) {
       case 2: return speeds_.chase;
       case 3: return speeds_.comet;
       case 4: return speeds_.waves;
@@ -243,10 +260,10 @@ private:
   int combo_repeat_count_ = 0;
   float combo_elapsed_s_ = 0.f;
 
-  float twinkle_[kDots] = {0};
-  float twinkle2_[kDots] = {0};
+  float twinkle_[kDots] = { 0 };
+  float twinkle2_[kDots] = { 0 };
 
-  uint8_t base_[kDots][3] = {{0, 0, 0}};
+  uint8_t base_[kDots][3] = { { 0, 0, 0 } };
 
   elapsedMicros frameTimer_;
   static constexpr uint32_t framePeriodUs_ = 1000000 / 60;

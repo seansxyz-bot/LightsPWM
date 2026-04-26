@@ -1,4 +1,4 @@
-	#include "pattern_file_writer.h"
+#include "pattern_file_writer.h"
 
 #include <SD.h>
 
@@ -14,15 +14,12 @@ void PatternFileWriter::reset() {
   expectedLines_ = 0;
   receivedLines_ = 0;
   version_ = 0;
-
-  for (int i = 0; i < 7; ++i) {
-    staging_[i] = 50;
-  }
+  stagedSpeed_ = 50;
 }
 
 void PatternFileWriter::abortFile() {
   reset();
-  }
+}
 
 bool PatternFileWriter::beginFile(uint8_t patternId, uint8_t expectedLines, uint8_t version) {
   reset();
@@ -31,16 +28,17 @@ bool PatternFileWriter::beginFile(uint8_t patternId, uint8_t expectedLines, uint
   expectedLines_ = expectedLines;
   version_ = version;
 
-  if (patternId_ == 1) {
-    if (expectedLines_ == 0 || expectedLines_ > 7) {
-      status_ = FileProto::FILE_ERROR;
-      return false;
-    }
-  } else {
-    if (expectedLines_ != 1) {
-      status_ = FileProto::FILE_ERROR;
-      return false;
-    }
+  // Only standalone pattern IDs 2-7 are writable.
+  // Combo ID 1 has no file/speed payload anymore.
+  if (patternId_ < 2 || patternId_ > 8) {
+    status_ = FileProto::FILE_ERROR;
+    return false;
+  }
+
+  // Every pattern has exactly one speed.
+  if (expectedLines_ != 1) {
+    status_ = FileProto::FILE_ERROR;
+    return false;
   }
 
   status_ = FileProto::FILE_RECEIVING;
@@ -50,21 +48,13 @@ bool PatternFileWriter::beginFile(uint8_t patternId, uint8_t expectedLines, uint
 bool PatternFileWriter::pushChunk(uint8_t speed) {
   if (status_ != FileProto::FILE_RECEIVING) return false;
 
-  if (patternId_ == 1) {
-    if (receivedLines_ >= 7) {
-      return true; // ignore extras for combo
-    }
-    staging_[receivedLines_++] = PatternSpeedTable::clampPct(speed);
-    return true;
-  }
-
-  // standalone patterns only accept first one
+  // Only first speed counts. Extras are ignored.
   if (receivedLines_ == 0) {
-    staging_[0] = PatternSpeedTable::clampPct(speed);
+    stagedSpeed_ = PatternSpeedTable::clampPct(speed);
     receivedLines_ = 1;
   }
 
-  return true; // ignore extras
+  return true;
 }
 
 bool PatternFileWriter::writePatternFileToDisk_(PatternFileReader& reader) {
@@ -74,13 +64,6 @@ bool PatternFileWriter::writePatternFileToDisk_(PatternFileReader& reader) {
   if (!f) return false;
 
   const PatternSpeedTable& t = reader.table();
-
-  f.print("cmbo ");
-  for (int i = 0; i < 7; ++i) {
-    f.print(t.combo[i]);
-    if (i < 6) f.print(' ');
-  }
-  f.println();
 
   f.print("chas "); f.println(t.chase);
   f.print("comt "); f.println(t.comet);
@@ -97,27 +80,15 @@ bool PatternFileWriter::writePatternFileToDisk_(PatternFileReader& reader) {
 
 bool PatternFileWriter::endFile(uint8_t expectedLines, PatternFileReader& reader) {
   if (status_ != FileProto::FILE_RECEIVING) return false;
-  if (expectedLines != expectedLines_) {
+
+  if (expectedLines != expectedLines_ || receivedLines_ != expectedLines_) {
     status_ = FileProto::FILE_ERROR;
     return false;
   }
 
-  if (patternId_ == 1) {
-    for (uint8_t i = 0; i < receivedLines_ && i < 7; ++i) {
-      reader.setComboSpeed(i, staging_[i]);
-    }
-  } else {
-    if (receivedLines_ >= 1) {
-      reader.setStandaloneSpeed(patternId_, staging_[0]);
-    }
-  }
+  reader.setSpeed(patternId_, stagedSpeed_);
 
   if (!writePatternFileToDisk_(reader)) {
-    status_ = FileProto::FILE_ERROR;
-    return false;
-  }
-
-   if (!writePatternFileToDisk_(reader)) {
     status_ = FileProto::FILE_ERROR;
     return false;
   }
