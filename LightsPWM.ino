@@ -94,9 +94,7 @@ static void handleApplyMaskPacket(const uint8_t* p) {
   const uint8_t b6 = p[6];
   const uint8_t b7 = p[7];
 
-  const uint32_t mask = (uint32_t)m0 |
-                        ((uint32_t)m1 << 8) |
-                        ((uint32_t)m2 << 16);
+  const uint32_t mask = (uint32_t)m0 | ((uint32_t)m1 << 8) | ((uint32_t)m2 << 16);
 
   if (chan <= 2) {
     for (uint16_t i = 0; i < NUM_OF_LEDS; ++i) {
@@ -148,82 +146,90 @@ static void handleFilePacket(const uint8_t* p) {
   const uint8_t cmd = p[0];
 
   switch (cmd) {
-    case FileProto::CMD_BEGIN_FILE: {
-      const uint8_t fileType = p[1];
+    case FileProto::CMD_BEGIN_FILE:
+      {
+        const uint8_t fileType = p[1];
 
-      if (fileType == FileProto::FILE_THEME) {
-        // keep your existing theme begin logic here
-        if (!g_themeWriter.beginFile(p[1], p[2], p[3], p[4])) {
-          Serial.println("BEGIN_FILE theme failed");
+        if (fileType == FileProto::FILE_THEME) {
+          // keep your existing theme begin logic here
+          if (!g_themeWriter.beginFile(p[1], p[2], p[3], p[4])) {
+            Serial.println("BEGIN_FILE theme failed");
+          }
+        } else if (fileType == FileProto::FILE_PATTERN) {
+          // p[2] = pattern id
+          // p[3] = expected lines
+          // p[4] = version
+          if (!g_patternWriter.beginFile(p[2], p[3], p[4])) {
+            Serial.println("BEGIN_FILE pattern failed");
+          }
         }
-      } else if (fileType == FileProto::FILE_PATTERN) {
-        // p[2] = pattern id
-        // p[3] = expected lines
-        // p[4] = version
-        if (!g_patternWriter.beginFile(p[2], p[3], p[4])) {
-          Serial.println("BEGIN_FILE pattern failed");
-        }
+        break;
       }
-      break;
-    }
 
-    case FileProto::CMD_FILE_CHUNK: {
-      if (g_themeWriter.status() == FileProto::FILE_RECEIVING) {
-        // keep your existing theme chunk logic
-        if (!g_themeWriter.pushChunk(p[1], p[2], p[3], p[4], p[5], p[6], p[7])) {
-          Serial.println("FILE_CHUNK theme failed");
+    case FileProto::CMD_FILE_CHUNK:
+      {
+        if (g_themeWriter.status() == FileProto::FILE_RECEIVING) {
+          // keep your existing theme chunk logic
+          if (!g_themeWriter.pushChunk(p[1], p[2], p[3], p[4], p[5], p[6], p[7])) {
+            Serial.println("FILE_CHUNK theme failed");
+          }
+        } else if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
+          // only p[1] matters for pattern speed chunks
+          if (!g_patternWriter.pushChunk(p[1])) {
+            Serial.println("FILE_CHUNK pattern failed");
+          }
         }
-      } else if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
-        // only p[1] matters for pattern speed chunks
-        if (!g_patternWriter.pushChunk(p[1])) {
-          Serial.println("FILE_CHUNK pattern failed");
-        }
+        break;
       }
-      break;
-    }
 
-    case FileProto::CMD_END_FILE: {
-      if (g_themeWriter.status() == FileProto::FILE_RECEIVING) {
-        if (!g_themeWriter.endFile(p[1], g_themeReader)) {
-          Serial.println("END_FILE theme failed");
-        } else {
-          // keep whatever theme refresh logic you already have
+    case FileProto::CMD_END_FILE:
+      {
+        if (g_themeWriter.status() == FileProto::FILE_RECEIVING) {
+          if (!g_themeWriter.endFile(p[1], g_themeReader)) {
+            Serial.println("END_FILE theme failed");
+          } else {
+            // keep whatever theme refresh logic you already have
+          }
+        } else if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
+          if (!g_patternWriter.endFile(p[1], g_patternReader)) {
+            Serial.println("END_FILE pattern failed");
+          } else {
+            patterns.setSpeedTable(g_patternReader.table());
+            Serial.println("Pattern speeds updated");
+          }
         }
-      } else if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
-        if (!g_patternWriter.endFile(p[1], g_patternReader)) {
-          Serial.println("END_FILE pattern failed");
-        } else {
-          patterns.setSpeedTable(g_patternReader.table());
-          Serial.println("Pattern speeds updated");
-        }
+        break;
       }
-      break;
-    }
 
-    case FileProto::CMD_ABORT_FILE: {
-      g_themeWriter.abortFile();
-      g_patternWriter.abortFile();
-      Serial.println("FILE aborted");
-      break;
-    }
+    case FileProto::CMD_ABORT_FILE:
+      {
+        g_themeWriter.abortFile();
+        g_patternWriter.abortFile();
+        Serial.println("FILE aborted");
+        break;
+      }
 
     default:
       break;
   }
 }
+
 static uint8_t currentFileStatus() {
-  if (g_themeWriter.status() == FileProto::FILE_RECEIVING) {
-    return g_themeWriter.status();
-  }
-  if (g_patternWriter.status() == FileProto::FILE_RECEIVING) {
-    return g_patternWriter.status();
-  }
-  if (g_themeWriter.status() == FileProto::FILE_ERROR ||
-      g_patternWriter.status() == FileProto::FILE_ERROR) {
+  const uint8_t ts = g_themeWriter.status();
+  const uint8_t ps = g_patternWriter.status();
+
+  if (ts == FileProto::FILE_ERROR || ps == FileProto::FILE_ERROR)
     return FileProto::FILE_ERROR;
-  }
+
+  if (ts == FileProto::FILE_RECEIVING || ps == FileProto::FILE_RECEIVING)
+    return FileProto::FILE_RECEIVING;
+
+  if (ts == FileProto::FILE_SUCCESS || ps == FileProto::FILE_SUCCESS)
+    return FileProto::FILE_SUCCESS;
+
   return FileProto::FILE_IDLE;
 }
+
 static void i2c_onRequest() {
   uint8_t req;
   if (!PIClient::takeArmedRequest(req)) {
@@ -233,28 +239,38 @@ static void i2c_onRequest() {
   }
 
   switch (req) {
-    case FileProto::REQ_WAKE_READY: {
-      uint8_t one = g_ready ? 1 : 0;
-      Wire.write(&one, 1);
-    } break;
+    case FileProto::REQ_WAKE_READY:
+      {
+        uint8_t one = g_ready ? 1 : 0;
+        Wire.write(&one, 1);
+      }
+      break;
 
-    case FileProto::REQ_LED_STATE: {
-      Wire.write(g_txBuf, (int)(3 * NUM_OF_LEDS));
-    } break;
+    case FileProto::REQ_LED_STATE:
+      {
+        Wire.write(g_txBuf, (int)(3 * NUM_OF_LEDS));
+      }
+      break;
 
-    case FileProto::REQ_SHUTDOWN: {
-      uint8_t one = g_allOff ? 1 : 0;
-      Wire.write(&one, 1);
-    } break;
+    case FileProto::REQ_SHUTDOWN:
+      {
+        uint8_t one = g_allOff ? 1 : 0;
+        Wire.write(&one, 1);
+      }
+      break;
 
-    case FileProto::REQ_FILE_STATUS: {
-      Wire.write(currentFileStatus());
-    } break;
+    case FileProto::REQ_FILE_STATUS:
+      {
+        Wire.write(currentFileStatus());
+      }
+      break;
 
-    default: {
-      uint8_t zero = 0;
-      Wire.write(&zero, 1);
-    } break;
+    default:
+      {
+        uint8_t zero = 0;
+        Wire.write(&zero, 1);
+      }
+      break;
   }
 }
 
@@ -268,8 +284,8 @@ void setup() {
     Serial.println("Theme storage ready");
     g_themeReader.loadAllFromDisk();
 
-  g_patternReader.loadFromDisk();
-  patterns.setSpeedTable(g_patternReader.table());
+    g_patternReader.loadFromDisk();
+    patterns.setSpeedTable(g_patternReader.table());
   } else {
     Serial.println("Theme storage init failed");
   }
@@ -298,7 +314,18 @@ static void handleWrite(const PIClient::WriteMsg& m) {
     case FileProto::CMD_APPLY_MASK:
       handleApplyMaskPacket(p);
       break;
+    case FileProto::CMD_PATTERN_SPEED:
+      {
+        const uint8_t patternId = p[1];
+        const uint8_t speed = p[2];
 
+        g_patternReader.setSpeed(patternId, speed);
+
+        // If PatternEngine has a live setter, call it too.
+       patterns.setSpeedTable(g_patternReader.table());
+
+        break;
+      }
     case FileProto::CMD_BEGIN_FILE:
     case FileProto::CMD_FILE_CHUNK:
     case FileProto::CMD_END_FILE:

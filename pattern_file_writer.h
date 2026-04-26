@@ -14,16 +14,17 @@ public:
 
   bool beginFile(uint8_t patternId, uint8_t expectedLines, uint8_t version);
   bool pushChunk(uint8_t speed);
-  bool endFile(uint8_t expectedLines, PatternFileReader& reader);
+  bool endFile(uint8_t expectedLines, PatternFileReader &reader);
   void abortFile();
 
 private:
-  bool writePatternFileToDisk_(PatternFileReader& reader);
+  bool writePatternFileToDisk_(PatternFileReader &reader);
 
   uint8_t status_ = FileProto::FILE_IDLE;
   uint8_t patternId_ = 0;
   uint8_t expectedLines_ = 0;
   uint8_t receivedLines_ = 0;
   uint8_t version_ = 0;
-  uint8_t stagedSpeed_ = 50;
+
+  uint8_t stagedSpeeds_[7]{50, 50, 50, 50, 50, 50, 50};
 };

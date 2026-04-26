@@ -31,7 +31,7 @@ class PatternEngine {
 public:
   // IDs:
   // 0=Off, 1=Combo, 2=Chase, 3=Comet, 4=Waves, 5=Slo-Glo,
-  // 6=Twinkle, 7=Slow Fade, 8=In Waves, 9=Alternate
+  // 6=Twinkle, 7=Slow Fade, 8=Alternate
   explicit PatternEngine(int activeID = 0) {
     setActive(activeID);
   }
@@ -47,6 +47,20 @@ public:
     speeds_ = table;
   }
 
+  void setPatternSpeed(uint8_t patternId, uint8_t speed) {
+    speed = PatternSpeedTable::clampPct(speed);
+
+    switch (patternId) {
+      case 2: speeds_.chase = speed; break;
+      case 3: speeds_.comet = speed; break;
+      case 4: speeds_.waves = speed; break;
+      case 5: speeds_.sloglo = speed; break;
+      case 6: speeds_.twinkle = speed; break;
+      case 7: speeds_.slowfade = speed; break;
+      case 8: speeds_.alternate = speed; break;
+      default: break;
+    }
+  }
   void primeFromPWM(const PWMEngine& pwm) {
     for (int i = 0; i < kDots; ++i) {
       base_[i][0] = (uint8_t)pwm.leds[i].getRed();
@@ -194,8 +208,8 @@ private:
       return activeID_;
     }
 
-    // Combo cycles pattern IDs 2-7.
-    // combo_mode_: 0..5 -> patternId: 2..7
+    // Combo cycles pattern IDs 2-8.
+    // combo_mode_: 0..5 -> patternId: 2..8
     return (uint8_t)(combo_mode_ + 2);
   }
 

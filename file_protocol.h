@@ -4,6 +4,7 @@
 namespace FileProto {
 
 static constexpr uint8_t CMD_APPLY_MASK  = 0x15;
+static constexpr uint8_t CMD_PATTERN_SPEED = 0x16;
 
 static constexpr uint8_t CMD_BEGIN_FILE  = 0x20;
 static constexpr uint8_t CMD_FILE_CHUNK  = 0x21;
